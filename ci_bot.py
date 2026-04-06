@@ -6,7 +6,6 @@ import argparse
 import subprocess
 import requests
 import re
-import shutil
 from datetime import datetime, timezone
 
 # Visual Constants
@@ -95,13 +94,6 @@ class CIBot:
         except: pass
 
 # Helper Functions
-def upload_gofile(file_path):
-    try:
-        with open(file_path, 'rb') as f:
-            r = requests.post('https://upload.gofile.io/uploadfile', files={'file': f})
-        return r.json()['data']['downloadPage']
-    except: return "Upload Failed"
-
 def upload_rclone(file_path, remote, folder):
     try:
         subprocess.run(["rclone", "copy", file_path, f"{remote}:{folder}"], check=True)
@@ -118,7 +110,7 @@ def fetch_progress(log_file):
             match = re.search(r'(\d+%) (\d+/\d+)', line)
             if match: return f"{match.group(1)} ({match.group(2)})"
     except: pass
-    return "Initializing..."
+    return None
 
 def format_duration(seconds):
     m, s = divmod(int(seconds), 60)
@@ -133,60 +125,42 @@ def main():
 
     CONFIG = load_env(args.config)
     bot = CIBot(CONFIG)
-    cpu_count = os.cpu_count()
 
     # Menu
-    print(f"\n{BOLD}{CYAN}# --- BUILD MENU ---{RESET}")
-    print(f"{BOLD_GREEN}1. m installclean{RESET} (Fast build, no sync)")
-    print(f"{BOLD_GREEN}2. m clean + repo sync{RESET} (Full clean, fresh source)")
-    print(f"{BOLD_GREEN}3. Plain Build{RESET} (No clean, no sync)")
+    print(f"\n{BOLD}{CYAN}# --- Build Menu ---{RESET}")
+    print(f"{BOLD_GREEN}1. m installclean + sync{RESET}")
+    print(f"{BOLD_GREEN}2. m clean + sync{RESET}")
+    print(f"{BOLD_GREEN}3. Plain Build{RESET}")
     
     choice = input(f"\n{BOLD}Select option (1-3): {RESET}").strip()
 
-    should_sync = False
-    clean_cmd = ""
+    # Build Command List
+    cmd_list = [f"source build/envsetup.sh", f"breakfast {CONFIG['DEVICE']} {CONFIG['VARIANT']}"]
 
     if choice == '1':
-        clean_cmd = "make installclean &&"
-        print(f"{YELLOW}Mode: installclean{RESET}")
+        cmd_list.append("repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags")
+        cmd_list.append("make installclean")
     elif choice == '2':
-        clean_cmd = "make clean &&"
-        should_sync = True
-        print(f"{YELLOW}Mode: clean and resyncing{RESET}")
-    elif choice == '3':
-        clean_cmd = ""
-        print(f"{YELLOW}Mode: Plain Build (No cleaning){RESET}")
-    else:
-        print(f"{RED}Invalid input. Exiting.{RESET}")
-        sys.exit(1)
-
-    # 1. Sync Section
-    if should_sync:
-        print(f"{BOLD_GREEN}Resyncing Sources...{RESET}")
-        bot.message_id = bot.send_message(f"<b>Build Status: Resyncing Sources</b>\n<b>ROM:</b> {ROM_NAME}")
-        start_sync = time.time()
-        subprocess.run(f"repo sync -c -j{cpu_count} --force-sync --no-clone-bundle --no-tags", shell=True)
-        bot.edit_message(f"<b>Sync Complete</b> in {format_duration(time.time()-start_sync)}")
-
-    # 2. Preparation
-    for f in ["out/error.log", "out/.lock", "build.log"]:
-        if os.path.exists(f): os.remove(f)
-
-    pick_cmd = f"repopick {' '.join(args.pick)} &&" if args.pick else ""
+        cmd_list.append("repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags")
+        cmd_list.append("make clean")
     
-    now = datetime.now(timezone.utc)
-    build_datetime = str(int(now.timestamp()))
-    build_number = now.strftime("%Y%m%d00")
-    export_vars = f"export BUILD_DATETIME={build_datetime} BUILD_NUMBER={build_number}"
+    if args.pick:
+        cmd_list.append(f"repopick {' '.join(args.pick)}")
 
-    # 3. Build Section
-    bot.message_id = bot.send_message(f"<b>Build Status: Compiling</b>\n<b>Device:</b> {CONFIG['DEVICE']}\n<b>Status:</b> Initializing...")
-    start_build = time.time()
+    # ALWAYS add evolution command at the end of the chain
+    cmd_list.append("m evolution")
 
-    full_cmd = (f"bash -c '{export_vars} && source build/envsetup.sh && "
-                f"breakfast {CONFIG['DEVICE']} {CONFIG['VARIANT']} && "
-                f"{clean_cmd} {pick_cmd} m evolution' 2>&1 | tee -a build.log")
+    # Combine with && to ensure one failure stops the whole process
+    full_cmd_chain = " && ".join(cmd_list)
 
+    # Preparation
+    if os.path.exists("build.log"): os.remove("build.log")
+    start_time_stamp = time.time() # Used to verify if ZIP is actually new
+
+    bot.message_id = bot.send_message(f"<b>Build Status: Starting</b>\n<b>ROM:</b> {ROM_NAME}\n<b>Device:</b> {CONFIG['DEVICE']}")
+
+    # Start Build
+    full_cmd = f"bash -c '{full_cmd_chain}' 2>&1 | tee build.log"
     process = subprocess.Popen(full_cmd, shell=True)
 
     prev_prog = ""
@@ -195,53 +169,51 @@ def main():
         if curr_prog and curr_prog != prev_prog:
             bot.edit_message(f"<b>Build Status: Compiling</b>\n<b>ROM:</b> {ROM_NAME}\n<b>Progress:</b> <code>{curr_prog}</code>")
             prev_prog = curr_prog
-        time.sleep(15)
+        time.sleep(30)
 
-    # 4. Result Logic
-    build_success = False
-    if os.path.exists("build.log"):
-        with open("build.log", "r", encoding="utf-8", errors="ignore") as f:
-            if "build completed successfully" in f.read().lower(): build_success = True
-
+    # Result Verification
     out_dir = f"out/target/product/{CONFIG['DEVICE']}"
-    if not build_success and os.path.exists(out_dir):
-        if any(f.endswith(".zip") and CONFIG['DEVICE'] in f for f in os.listdir(out_dir)):
-            build_success = True
+    build_success = False
+    rom_zip = None
 
-    if not build_success:
-        bot.edit_message("<b>Build Failed!</b>")
-        if os.path.exists("out/error.log"): bot.send_document("out/error.log")
-        sys.exit(1)
-
-    # 5. Uploading (ROM ZIP ONLY)
-    try:
-        all_zips = [f for f in os.listdir(out_dir) if f.endswith(".zip") and CONFIG['DEVICE'] in f 
+    if os.path.exists(out_dir):
+        # Find all zips, excluding ota/target files
+        all_zips = [os.path.join(out_dir, f) for f in os.listdir(out_dir) 
+                    if f.endswith(".zip") and CONFIG['DEVICE'] in f 
                     and "ota" not in f.lower() and "target_files" not in f.lower()]
-        all_zips.sort(key=lambda x: os.path.getsize(os.path.join(out_dir, x)), reverse=True)
-        rom_zip = os.path.join(out_dir, all_zips[0])
+        
+        if all_zips:
+            # Get the most recently modified zip
+            latest_zip = max(all_zips, key=os.path.getmtime)
+            # CHECK: Was this file created AFTER we started the script?
+            if os.path.getmtime(latest_zip) > start_time_stamp:
+                build_success = True
+                rom_zip = latest_zip
 
-        print(f"{BOLD_GREEN}Uploading ROM Zip...{RESET}")
+    if build_success:
+        bot.edit_message("<b>Build Successful!</b> Uploading...")
+        
         r_remote = CONFIG.get('RCLONE_REMOTE')
         r_folder = CONFIG.get('RCLONE_FOLDER')
-        rom_link = upload_rclone(rom_zip, r_remote, r_folder) if r_remote else upload_gofile(rom_zip)
+        rom_link = upload_rclone(rom_zip, r_remote, r_folder)
 
         md5 = subprocess.check_output(f"md5sum {rom_zip} | awk '{{print $1}}'", shell=True).decode().strip()
         size = subprocess.check_output(f"ls -sh {rom_zip} | awk '{{print $1}}'", shell=True).decode().strip()
 
-        final_msg = (f"<b>Build Status: Success</b>\n\n"
+        final_msg = (f"<b>Build Status: Success ✅</b>\n\n"
                      f"<b>Device:</b> <code>{CONFIG['DEVICE']}</code>\n"
                      f"<b>Size:</b> <code>{size}</code>\n"
                      f"<b>MD5:</b> <code>{md5}</code>\n"
-                     f"<b>Duration:</b> <code>{format_duration(time.time()-start_build)}</code>\n\n"
+                     f"<b>Duration:</b> <code>{format_duration(time.time()-start_time_stamp)}</code>\n\n"
                      f"<b>Download:</b> <a href=\"{rom_link}\">ROM Zip</a>")
         
         bot.edit_message(final_msg)
-        bot.pin_message(bot.message_id) # Pin restored here
-        
-    except Exception as e:
-        bot.send_message(f"Upload failed: {e}")
+        bot.pin_message(bot.message_id)
+    else:
+        bot.edit_message(f"<b>Build Failed! ❌</b>\nROM zip not found or compilation error.")
+        if os.path.exists("out/error.log"): bot.send_document("out/error.log")
 
-    if CONFIG.get('POWEROFF'): os.system("sudo poweroff")
+    if CONFIG.get('POWEROFF') == True: os.system("sudo poweroff")
 
 if __name__ == "__main__":
     main()
