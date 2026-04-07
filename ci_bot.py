@@ -63,7 +63,7 @@ def fetch_progress(log_file):
         if not os.path.exists(log_file): return None
         with open(log_file, "r") as f:
             lines = f.readlines()
-            for line in reversed(lines):
+            for line in reversed(lines[-20:]): 
                 match = re.search(r'(\d+%) (\d+/\d+)', line)
                 if match: return f"{match.group(1)} ({match.group(2)})"
     except: pass
@@ -83,47 +83,55 @@ def main():
     CONFIG = load_env(args.config)
     bot = CIBot(CONFIG)
 
-    print(f"\n{BOLD}{CYAN}# --- Bot Menu ---{RESET}")
-    print(f"{BOLD_GREEN}1. m clean -> repo sync -> source build -> lunch -> m yaap{RESET}")
-    print(f"{BOLD_GREEN}2. repo sync -> source build -> lunch -> m installclean && m yaap{RESET}")
-    print(f"{BOLD_GREEN}3. source build -> lunch -> m yaap{RESET}")
+    # Specific Configuration for LineageOS bp4a
+    DEVICE = CONFIG.get('DEVICE', 'zephyr')
+    RELEASE_TYPE = "bp4a"
+    BUILD_VARIANT = "user"
+    LUNCH_COMBO = f"lineage_{DEVICE}-{RELEASE_TYPE}-{BUILD_VARIANT}"
+
+    print(f"\n{BOLD}{CYAN}# --- LineageOS CI Bot ---{RESET}")
+    print(f"Target: {LUNCH_COMBO}")
+    print(f"{BOLD_GREEN}1. m clean -> repo sync -> m bacon{RESET}")
+    print(f"{BOLD_GREEN}2. repo sync -> m installclean -> m bacon{RESET}")
+    print(f"{BOLD_GREEN}3. Dirty build (m bacon){RESET}")
     
     choice = input(f"\n{BOLD}Select option (1-3): {RESET}").strip()
 
-    setup_env = f"source build/envsetup.sh && lunch yaap_{CONFIG['DEVICE']}-{CONFIG['VARIANT']}"
-    sync_cmd = "repo sync -j$(nproc --all) --no-tags --no-clone-bundle --current-branch"
-    build_cmd = "m yaap"
+    setup_env = f"source build/envsetup.sh && lunch {LUNCH_COMBO}"
+    sync_cmd = "repo sync -j$(nproc --all) --no-tags --no-clone-bundle --current-branch --force-sync"
+    build_cmd = "m bacon"
+    
     if args.pick:
-        build_cmd = f"repopick {' '.join(args.pick)} && m yaap"
+        build_cmd = f"repopick {' '.join(args.pick)} && m bacon"
 
     log_file = "build.log"
     if os.path.exists(log_file): os.remove(log_file)
     start_time = time.time()
     
-    mode_map = {"1": "Clean", "2": "Installclean", "3": "Plain"}
+    mode_map = {"1": "Clean", "2": "Installclean", "3": "Dirty"}
     mode_label = mode_map.get(choice, "Unknown")
     
-    bot.message_id = bot.send_message(f"<b>Build Status: Starting</b>\n<b>Device:</b> <code>{CONFIG['DEVICE']}</code>\n<b>Variant:</b> <code>{mode_label}</code>")
+    bot.message_id = bot.send_message(f"<b>Build Status: Starting</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Mode:</b> <code>{mode_label}</code>")
 
     if choice == '1':
-        bot.edit_message(f"<b>Build Status: m clean...</b>\n<b>Device:</b> <code>{CONFIG['DEVICE']}</code>\n<b>Variant:</b> <code>{mode_label}</code>")
-        subprocess.run(f"bash -c '{setup_env} && m clean' | tee -a {log_file}", shell=True)
+        bot.edit_message(f"<b>Build Status: Cleaning...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
+        subprocess.run(f"bash -c 'source build/envsetup.sh && m clean' | tee -a {log_file}", shell=True)
         
-        bot.edit_message(f"<b>Build Status: Syncing Source...</b>\n<b>Device:</b> <code>{CONFIG['DEVICE']}</code>\n<b>Variant:</b> <code>{mode_label}</code>")
+        bot.edit_message(f"<b>Build Status: Syncing Source...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
         subprocess.run(f"bash -c '{sync_cmd}' | tee -a {log_file}", shell=True)
         
         full_build_chain = f"{setup_env} && {build_cmd}"
 
     elif choice == '2':
-        bot.edit_message(f"<b>Build Status: Syncing Source...</b>\n<b>Device:</b> <code>{CONFIG['DEVICE']}</code>\n<b>Variant:</b> <code>{mode_label}</code>")
+        bot.edit_message(f"<b>Build Status: Syncing Source...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
         subprocess.run(f"bash -c '{sync_cmd}' | tee -a {log_file}", shell=True)
         
         full_build_chain = f"{setup_env} && m installclean && {build_cmd}"
     
-    elif choice == '3':
+    else:
         full_build_chain = f"{setup_env} && {build_cmd}"
 
-    bot.edit_message(f"<b>Build Status: Compiling...</b>\n<b>Device:</b> <code>{CONFIG['DEVICE']}</code>\n<b>Variant:</b> <code>{mode_label}</code>\n<b>Progress:</b> <code>Initializing</code>")
+    bot.edit_message(f"<b>Build Status: Compiling bacon...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Progress:</b> <code>Initializing</code>")
     
     compile_proc = subprocess.Popen(f"bash -c '{full_build_chain}' 2>&1 | tee -a {log_file}", shell=True)
 
@@ -131,16 +139,16 @@ def main():
     while compile_proc.poll() is None:
         curr_prog = fetch_progress(log_file)
         if curr_prog and curr_prog != prev_prog:
-            bot.edit_message(f"<b>Build Status: Compiling</b>\n<b>Device:</b> <code>{CONFIG['DEVICE']}</code>\n<b>Variant:</b> <code>{mode_label}</code>\n<b>Progress:</b> <code>{curr_prog}</code>")
+            bot.edit_message(f"<b>Build Status: Compiling</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Progress:</b> <code>{curr_prog}</code>")
             prev_prog = curr_prog
         time.sleep(30)
 
-    out_dir = f"out/target/product/{CONFIG['DEVICE']}"
+    out_dir = f"out/target/product/{DEVICE}"
     build_success = False
     rom_zip = None
 
     if os.path.exists(out_dir):
-        zips = [os.path.join(out_dir, f) for f in os.listdir(out_dir) if f.endswith(".zip") and CONFIG['DEVICE'] in f and "ota" not in f.lower()]
+        zips = [os.path.join(out_dir, f) for f in os.listdir(out_dir) if f.endswith(".zip") and DEVICE in f and "ota" not in f.lower() and "target_files" not in f.lower()]
         if zips:
             rom_zip = max(zips, key=os.path.getmtime)
             if os.path.getmtime(rom_zip) > start_time:
@@ -152,15 +160,14 @@ def main():
         
         bot.edit_message(
             f"<b>Build Status: Success ✅</b>\n\n"
-            f"<b>Device:</b> <code>{CONFIG['DEVICE']}</code>\n"
-            f"<b>Variant:</b> <code>{mode_label}</code>\n"
+            f"<b>Device:</b> <code>{DEVICE}</code>\n"
             f"<b>File:</b> <code>{os.path.basename(rom_zip)}</code>\n"
             f"<b>Size:</b> <code>{size}</code>\n"
             f"<b>MD5:</b> <code>{md5}</code>\n"
             f"<b>Duration:</b> <code>{format_duration(time.time()-start_time)}</code>"
         )
     else:
-        bot.edit_message(f"<b>Build Status: Failed ❌</b>\n<b>Variant:</b> <code>{mode_label}</code>\nCheck build.log.")
+        bot.edit_message(f"<b>Build Status: Failed ❌</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\nCheck build.log.")
         if os.path.exists(log_file):
             bot.send_document(log_file)
 
@@ -169,3 +176,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+        
