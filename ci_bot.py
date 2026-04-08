@@ -38,11 +38,8 @@ class CIBot:
         self.message_id = None
 
     def _get_keyboard(self):
-        # Creates a simple "Refresh" button
         return json.dumps({
-            "inline_keyboard": [[
-                {"text": "🔄 Refresh Progress", "callback_data": "refresh"}
-            ]]
+            "inline_keyboard": [[{"text": "🔄 Auto-Refreshing", "callback_data": "none"}]]
         })
 
     def send_message(self, text):
@@ -56,11 +53,14 @@ class CIBot:
         try:
             r = requests.post(url, data=data)
             res = r.json()
-            if res.get("ok"): return res["result"]["message_id"]
+            if res.get("ok"): 
+                self.message_id = res["result"]["message_id"]
+                return self.message_id
         except: return None
 
     def edit_message(self, text, show_button=True):
-        if not self.message_id: return
+        if not self.message_id: 
+            return self.send_message(text) # Fallback if ID is lost
         url = f"{self.base_url}/editMessageText"
         data = {
             "chat_id": self.config['CHAT_ID'], 
@@ -106,71 +106,59 @@ def main():
     bot = CIBot(CONFIG)
 
     DEVICE = CONFIG.get('DEVICE', 'zephyr')
-    RELEASE_TYPE = "bp4a"
-    BUILD_VARIANT = "user"
-    LUNCH_COMBO = f"lineage_{DEVICE}-{RELEASE_TYPE}-{BUILD_VARIANT}"
+    LUNCH_COMBO = f"lineage_{DEVICE}-bp4a-user"
 
     print(f"\n{BOLD}{CYAN}# --- LineageOS CI Bot ---{RESET}")
-    print(f"Target: {LUNCH_COMBO}")
-    print(f"{BOLD_GREEN}1. m clean -> repo sync -> m bacon{RESET}")
-    print(f"{BOLD_GREEN}2. repo sync -> m installclean -> m bacon{RESET}")
-    print(f"{BOLD_GREEN}3. Dirty build (m bacon){RESET}")
-    
-    choice = input(f"\n{BOLD}Select option (1-3): {RESET}").strip()
-
-    setup_env = f"source build/envsetup.sh && lunch {LUNCH_COMBO}"
-    sync_cmd = "repo sync -j$(nproc --all) --no-tags --no-clone-bundle --current-branch --force-sync"
-    build_cmd = "m bacon"
-    
-    if args.pick:
-        build_cmd = f"repopick {' '.join(args.pick)} && m bacon"
+    print(f"{BOLD_GREEN}1. Clean Build | 2. Installclean | 3. Dirty{RESET}")
+    choice = input(f"\n{BOLD}Select option: {RESET}").strip()
 
     log_file = "build.log"
     if os.path.exists(log_file): os.remove(log_file)
     start_time = time.time()
     
-    mode_map = {"1": "Clean", "2": "Installclean", "3": "Dirty"}
-    mode_label = mode_map.get(choice, "Unknown")
+    mode_label = {"1": "Clean", "2": "Installclean", "3": "Dirty"}.get(choice, "Unknown")
     
-    bot.message_id = bot.send_message(f"<b>Build Status: Starting</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Mode:</b> <code>{mode_label}</code>")
+    # --- ONLY ONE SEND_MESSAGE CALL HERE ---
+    bot.send_message(f"<b>Build Status: Initializing</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Mode:</b> <code>{mode_label}</code>")
 
-    # Initial steps
+    setup_env = f"source build/envsetup.sh && lunch {LUNCH_COMBO}"
+    sync_cmd = "repo sync -j$(nproc --all) --no-tags --no-clone-bundle --current-branch --force-sync"
+    build_cmd = "m bacon"
+    if args.pick: build_cmd = f"repopick {' '.join(args.pick)} && m bacon"
+
+    # Step 1: Clean/Sync (Updating the SAME message)
     if choice == '1':
         bot.edit_message(f"<b>Build Status: Cleaning...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
-        subprocess.run(f"bash -c 'source build/envsetup.sh && m clean' | tee -a {log_file}", shell=True)
-        bot.edit_message(f"<b>Build Status: Syncing Source...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
-        subprocess.run(f"bash -c '{sync_cmd}' | tee -a {log_file}", shell=True)
+        subprocess.run(f"bash -c 'source build/envsetup.sh && m clean' >> {log_file} 2>&1", shell=True)
+        
+        bot.edit_message(f"<b>Build Status: Syncing...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
+        subprocess.run(f"bash -c '{sync_cmd}' >> {log_file} 2>&1", shell=True)
         full_build_chain = f"{setup_env} && {build_cmd}"
     elif choice == '2':
-        bot.edit_message(f"<b>Build Status: Syncing Source...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
-        subprocess.run(f"bash -c '{sync_cmd}' | tee -a {log_file}", shell=True)
+        bot.edit_message(f"<b>Build Status: Syncing...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
+        subprocess.run(f"bash -c '{sync_cmd}' >> {log_file} 2>&1", shell=True)
         full_build_chain = f"{setup_env} && m installclean && {build_cmd}"
     else:
         full_build_chain = f"{setup_env} && {build_cmd}"
 
-    bot.edit_message(f"<b>Build Status: Compiling bacon...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Progress:</b> <code>Initializing</code>")
-    
+    # Step 2: Compiling
+    bot.edit_message(f"<b>Build Status: Compiling...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Progress:</b> <code>Starting</code>")
     compile_proc = subprocess.Popen(f"bash -c '{full_build_chain}' 2>&1 | tee -a {log_file}", shell=True)
 
     while compile_proc.poll() is None:
         curr_prog = fetch_progress(log_file)
         elapsed = format_duration(time.time() - start_time)
-        
-        status_text = (
+        bot.edit_message(
             f"<b>Build Status: Compiling</b>\n"
             f"<b>Target:</b> <code>{LUNCH_COMBO}</code>\n"
-            f"<b>Progress:</b> <code>{curr_prog if curr_prog else 'Running...'}</code>\n"
+            f"<b>Progress:</b> <code>{curr_prog or 'Running...'}</code>\n"
             f"<b>Elapsed:</b> <code>{elapsed}</code>"
         )
-        
-        bot.edit_message(status_text)
-        time.sleep(45) # Increased slightly to prevent spamming
+        time.sleep(30)
 
-    # Completion Logic
-    end_time = time.time()
-    total_duration = format_duration(end_time - start_time)
+    # Final Result
+    total_duration = format_duration(time.time() - start_time)
     out_dir = f"out/target/product/{DEVICE}"
-    build_success = False
     rom_zip = None
 
     if os.path.exists(out_dir):
@@ -178,34 +166,22 @@ def main():
         if zips:
             rom_zip = max(zips, key=os.path.getmtime)
             if os.path.getmtime(rom_zip) > start_time:
-                build_success = True
+                # Success
+                size = subprocess.check_output(f"ls -sh {rom_zip} | awk '{{print $1}}'", shell=True).decode().strip()
+                bot.edit_message(
+                    f"<b>Build Status: Success ✅</b>\n\n"
+                    f"<b>File:</b> <code>{os.path.basename(rom_zip)}</code>\n"
+                    f"<b>Size:</b> <code>{size}</code>\n"
+                    f"<b>Duration:</b> <code>{total_duration}</code>",
+                    show_button=False
+                )
+                return
 
-    if build_success:
-        md5 = subprocess.check_output(f"md5sum {rom_zip} | awk '{{print $1}}'", shell=True).decode().strip()
-        size = subprocess.check_output(f"ls -sh {rom_zip} | awk '{{print $1}}'", shell=True).decode().strip()
-        
-        bot.edit_message(
-            f"<b>Build Status: Success ✅</b>\n\n"
-            f"<b>Device:</b> <code>{DEVICE}</code>\n"
-            f"<b>File:</b> <code>{os.path.basename(rom_zip)}</code>\n"
-            f"<b>Size:</b> <code>{size}</code>\n"
-            f"<b>MD5:</b> <code>{md5}</code>\n"
-            f"<b>Duration:</b> <code>{total_duration}</code>",
-            show_button=False
-        )
-    else:
-        bot.edit_message(
-            f"<b>Build Status: Failed ❌</b>\n"
-            f"<b>Target:</b> <code>{LUNCH_COMBO}</code>\n"
-            f"<b>Elapsed:</b> <code>{total_duration}</code>\n"
-            f"Check build.log.",
-            show_button=False
-        )
-        if os.path.exists(log_file):
-            bot.send_document(log_file)
+    # Failure
+    bot.edit_message(f"<b>Build Status: Failed ❌</b>\n<b>Elapsed:</b> <code>{total_duration}</code>", show_button=False)
+    if os.path.exists(log_file): bot.send_document(log_file)
 
-    if CONFIG.get('POWEROFF') == True:
-        os.system("sudo poweroff")
+    if CONFIG.get('POWEROFF') == True: os.system("sudo poweroff")
 
 if __name__ == "__main__":
     main()
