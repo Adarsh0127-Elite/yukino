@@ -72,7 +72,10 @@ def fetch_progress(log_file):
 def format_duration(seconds):
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
-    return f"{h}h {m}m {s}s" if h > 0 else f"{m}m {s}s"
+    if h > 0:
+        return f"{h}h {m}m {s}s"
+    else:
+        return f"{m}m {s}s"
 
 def main():
     parser = argparse.ArgumentParser()
@@ -83,7 +86,7 @@ def main():
     CONFIG = load_env(args.config)
     bot = CIBot(CONFIG)
 
-    # Specific Configuration for LineageOS bp4a
+    # Specific Configuration for LineageOS
     DEVICE = CONFIG.get('DEVICE', 'zephyr')
     RELEASE_TYPE = "bp4a"
     BUILD_VARIANT = "user"
@@ -113,6 +116,7 @@ def main():
     
     bot.message_id = bot.send_message(f"<b>Build Status: Starting</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Mode:</b> <code>{mode_label}</code>")
 
+    # Handle Pre-build actions
     if choice == '1':
         bot.edit_message(f"<b>Build Status: Cleaning...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
         subprocess.run(f"bash -c 'source build/envsetup.sh && m clean' | tee -a {log_file}", shell=True)
@@ -131,18 +135,28 @@ def main():
     else:
         full_build_chain = f"{setup_env} && {build_cmd}"
 
+    # Execution and Progress Tracking
     bot.edit_message(f"<b>Build Status: Compiling bacon...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Progress:</b> <code>Initializing</code>")
     
     compile_proc = subprocess.Popen(f"bash -c '{full_build_chain}' 2>&1 | tee -a {log_file}", shell=True)
 
-    prev_prog = ""
     while compile_proc.poll() is None:
         curr_prog = fetch_progress(log_file)
-        if curr_prog and curr_prog != prev_prog:
-            bot.edit_message(f"<b>Build Status: Compiling</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Progress:</b> <code>{curr_prog}</code>")
-            prev_prog = curr_prog
+        elapsed = format_duration(time.time() - start_time)
+        
+        prog_text = curr_prog if curr_prog else "In progress..."
+        
+        bot.edit_message(
+            f"<b>Build Status: Compiling</b>\n"
+            f"<b>Target:</b> <code>{LUNCH_COMBO}</code>\n"
+            f"<b>Progress:</b> <code>{prog_text}</code>\n"
+            f"<b>Elapsed:</b> <code>{elapsed}</code>"
+        )
         time.sleep(30)
 
+    # Post-Build logic
+    end_time = time.time()
+    total_duration = format_duration(end_time - start_time)
     out_dir = f"out/target/product/{DEVICE}"
     build_success = False
     rom_zip = None
@@ -151,6 +165,7 @@ def main():
         zips = [os.path.join(out_dir, f) for f in os.listdir(out_dir) if f.endswith(".zip") and DEVICE in f and "ota" not in f.lower() and "target_files" not in f.lower()]
         if zips:
             rom_zip = max(zips, key=os.path.getmtime)
+            # Ensure the zip was actually created during this session
             if os.path.getmtime(rom_zip) > start_time:
                 build_success = True
 
@@ -164,16 +179,21 @@ def main():
             f"<b>File:</b> <code>{os.path.basename(rom_zip)}</code>\n"
             f"<b>Size:</b> <code>{size}</code>\n"
             f"<b>MD5:</b> <code>{md5}</code>\n"
-            f"<b>Duration:</b> <code>{format_duration(time.time()-start_time)}</code>"
+            f"<b>Build Time:</b> <code>{total_duration}</code>"
         )
     else:
-        bot.edit_message(f"<b>Build Status: Failed ❌</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\nCheck build.log.")
+        bot.edit_message(
+            f"<b>Build Status: Failed ❌</b>\n"
+            f"<b>Target:</b> <code>{LUNCH_COMBO}</code>\n"
+            f"<b>Time Elapsed:</b> <code>{total_duration}</code>\n"
+            f"Check build.log for errors."
+        )
         if os.path.exists(log_file):
             bot.send_document(log_file)
 
     if CONFIG.get('POWEROFF') == True:
+        print(f"{YELLOW}Build finished. Powering off...{RESET}")
         os.system("sudo poweroff")
 
 if __name__ == "__main__":
     main()
-        
