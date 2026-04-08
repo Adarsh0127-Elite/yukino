@@ -6,6 +6,7 @@ import argparse
 import subprocess
 import requests
 import re
+import json
 
 YELLOW = "\033[33m"
 BOLD = "\033[1m"
@@ -36,19 +37,40 @@ class CIBot:
         self.base_url = f"https://api.telegram.org/bot{config['BOT_TOKEN']}"
         self.message_id = None
 
+    def _get_keyboard(self):
+        # Creates a simple "Refresh" button
+        return json.dumps({
+            "inline_keyboard": [[
+                {"text": "🔄 Refresh Progress", "callback_data": "refresh"}
+            ]]
+        })
+
     def send_message(self, text):
         url = f"{self.base_url}/sendMessage"
-        data = {"chat_id": self.config['CHAT_ID'], "text": text, "parse_mode": "html"}
+        data = {
+            "chat_id": self.config['CHAT_ID'], 
+            "text": text, 
+            "parse_mode": "html",
+            "reply_markup": self._get_keyboard()
+        }
         try:
             r = requests.post(url, data=data)
             res = r.json()
             if res.get("ok"): return res["result"]["message_id"]
         except: return None
 
-    def edit_message(self, text):
+    def edit_message(self, text, show_button=True):
         if not self.message_id: return
         url = f"{self.base_url}/editMessageText"
-        data = {"chat_id": self.config['CHAT_ID'], "message_id": self.message_id, "text": text, "parse_mode": "html"}
+        data = {
+            "chat_id": self.config['CHAT_ID'], 
+            "message_id": self.message_id, 
+            "text": text, 
+            "parse_mode": "html"
+        }
+        if show_button:
+            data["reply_markup"] = self._get_keyboard()
+            
         try: requests.post(url, data=data)
         except: pass
 
@@ -72,10 +94,7 @@ def fetch_progress(log_file):
 def format_duration(seconds):
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
-    if h > 0:
-        return f"{h}h {m}m {s}s"
-    else:
-        return f"{m}m {s}s"
+    return f"{h}h {m}m {s}s" if h > 0 else f"{m}m {s}s"
 
 def main():
     parser = argparse.ArgumentParser()
@@ -86,7 +105,6 @@ def main():
     CONFIG = load_env(args.config)
     bot = CIBot(CONFIG)
 
-    # Specific Configuration for LineageOS
     DEVICE = CONFIG.get('DEVICE', 'zephyr')
     RELEASE_TYPE = "bp4a"
     BUILD_VARIANT = "user"
@@ -116,26 +134,20 @@ def main():
     
     bot.message_id = bot.send_message(f"<b>Build Status: Starting</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Mode:</b> <code>{mode_label}</code>")
 
-    # Handle Pre-build actions
+    # Initial steps
     if choice == '1':
         bot.edit_message(f"<b>Build Status: Cleaning...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
         subprocess.run(f"bash -c 'source build/envsetup.sh && m clean' | tee -a {log_file}", shell=True)
-        
         bot.edit_message(f"<b>Build Status: Syncing Source...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
         subprocess.run(f"bash -c '{sync_cmd}' | tee -a {log_file}", shell=True)
-        
         full_build_chain = f"{setup_env} && {build_cmd}"
-
     elif choice == '2':
         bot.edit_message(f"<b>Build Status: Syncing Source...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>")
         subprocess.run(f"bash -c '{sync_cmd}' | tee -a {log_file}", shell=True)
-        
         full_build_chain = f"{setup_env} && m installclean && {build_cmd}"
-    
     else:
         full_build_chain = f"{setup_env} && {build_cmd}"
 
-    # Execution and Progress Tracking
     bot.edit_message(f"<b>Build Status: Compiling bacon...</b>\n<b>Target:</b> <code>{LUNCH_COMBO}</code>\n<b>Progress:</b> <code>Initializing</code>")
     
     compile_proc = subprocess.Popen(f"bash -c '{full_build_chain}' 2>&1 | tee -a {log_file}", shell=True)
@@ -144,17 +156,17 @@ def main():
         curr_prog = fetch_progress(log_file)
         elapsed = format_duration(time.time() - start_time)
         
-        prog_text = curr_prog if curr_prog else "In progress..."
-        
-        bot.edit_message(
+        status_text = (
             f"<b>Build Status: Compiling</b>\n"
             f"<b>Target:</b> <code>{LUNCH_COMBO}</code>\n"
-            f"<b>Progress:</b> <code>{prog_text}</code>\n"
+            f"<b>Progress:</b> <code>{curr_prog if curr_prog else 'Running...'}</code>\n"
             f"<b>Elapsed:</b> <code>{elapsed}</code>"
         )
-        time.sleep(30)
+        
+        bot.edit_message(status_text)
+        time.sleep(45) # Increased slightly to prevent spamming
 
-    # Post-Build logic
+    # Completion Logic
     end_time = time.time()
     total_duration = format_duration(end_time - start_time)
     out_dir = f"out/target/product/{DEVICE}"
@@ -162,10 +174,9 @@ def main():
     rom_zip = None
 
     if os.path.exists(out_dir):
-        zips = [os.path.join(out_dir, f) for f in os.listdir(out_dir) if f.endswith(".zip") and DEVICE in f and "ota" not in f.lower() and "target_files" not in f.lower()]
+        zips = [os.path.join(out_dir, f) for f in os.listdir(out_dir) if f.endswith(".zip") and DEVICE in f and "ota" not in f.lower()]
         if zips:
             rom_zip = max(zips, key=os.path.getmtime)
-            # Ensure the zip was actually created during this session
             if os.path.getmtime(rom_zip) > start_time:
                 build_success = True
 
@@ -179,20 +190,21 @@ def main():
             f"<b>File:</b> <code>{os.path.basename(rom_zip)}</code>\n"
             f"<b>Size:</b> <code>{size}</code>\n"
             f"<b>MD5:</b> <code>{md5}</code>\n"
-            f"<b>Build Time:</b> <code>{total_duration}</code>"
+            f"<b>Duration:</b> <code>{total_duration}</code>",
+            show_button=False
         )
     else:
         bot.edit_message(
             f"<b>Build Status: Failed ❌</b>\n"
             f"<b>Target:</b> <code>{LUNCH_COMBO}</code>\n"
-            f"<b>Time Elapsed:</b> <code>{total_duration}</code>\n"
-            f"Check build.log for errors."
+            f"<b>Elapsed:</b> <code>{total_duration}</code>\n"
+            f"Check build.log.",
+            show_button=False
         )
         if os.path.exists(log_file):
             bot.send_document(log_file)
 
     if CONFIG.get('POWEROFF') == True:
-        print(f"{YELLOW}Build finished. Powering off...{RESET}")
         os.system("sudo poweroff")
 
 if __name__ == "__main__":
