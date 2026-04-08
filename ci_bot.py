@@ -6,6 +6,7 @@ import subprocess
 import requests
 import re
 import json
+from datetime import datetime
 
 # Terminal Colors
 YELLOW = "\033[33m"
@@ -17,8 +18,7 @@ CYAN = "\033[36m"
 
 def load_env(file_path):
     config = {}
-    if not os.path.exists(file_path):
-        return config
+    if not os.path.exists(file_path): return config
     with open(file_path, 'r') as f:
         for line in f:
             if line.strip().startswith('#') or not line.strip(): continue
@@ -28,7 +28,6 @@ def load_env(file_path):
     return config
 
 def get_env_info(var_name, fallback="Unknown"):
-    """Pulls info directly from the server's shell environment."""
     return os.environ.get(var_name, fallback)
 
 class CIBot:
@@ -49,6 +48,12 @@ class CIBot:
             if not self.message_id and r.get("ok"): self.message_id = r["result"]["message_id"]
         except: pass
 
+    def send_document(self, file_path):
+        try:
+            with open(file_path, 'rb') as f:
+                requests.post(f"{self.base_url}/sendDocument", data={"chat_id": self.config['CHAT_ID']}, files={"document": f})
+        except: pass
+
 def render_advanced_bar(percentage):
     total_slots = 15
     filled_slots = int((total_slots * percentage) // 100)
@@ -56,90 +61,117 @@ def render_advanced_bar(percentage):
     return f"[{bar}]"
 
 def fetch_stats(log_file, start_time):
-    stats = {"percentage": 0.0, "done": 0, "total": 0, "tasks": "0", "eta": "Calculating..."}
+    stats = {"percentage": 0.0, "done": 0, "total": 0, "tasks": "0", "eta": "0m 0s"}
     try:
         if not os.path.exists(log_file): return stats
         with open(log_file, "r") as f:
-            content = f.read()
-            # Match progress like [ 12% 1234/10000]
-            matches = re.findall(r'\[\s*(\d+)%\s+(\d+)/(\d+)\]', content)
-            if matches:
-                last = matches[-1]
-                stats["percentage"], stats["done"], stats["total"] = float(last[0]), int(last[1]), int(last[2])
-                if stats["percentage"] > 0:
-                    elapsed = time.time() - start_time
-                    total_est = (elapsed * 100) / stats["percentage"]
-                    remaining = total_est - elapsed
-                    stats["eta"] = f"{int(remaining // 60)}m {int(remaining % 60)}s"
+            lines = f.readlines()
+            # Search reversed to find the most recent build progress
+            for line in reversed(lines[-50:]):
+                match = re.search(r'\[\s*(\d+)%\s+(\d+)/(\d+)\]', line)
+                if match:
+                    stats["percentage"] = float(match.group(1))
+                    stats["done"] = int(match.group(2))
+                    stats["total"] = int(match.group(3))
+                    
+                    if stats["percentage"] > 0:
+                        elapsed = time.time() - start_time
+                        total_est = (elapsed * 100) / stats["percentage"]
+                        remaining = total_est - elapsed
+                        stats["eta"] = f"{int(remaining // 60)}m {int(remaining % 60)}s"
+                    break
             
-            task_match = re.findall(r'(\d+) tasks running', content)
-            if task_match: stats["tasks"] = task_match[-1]
+            for line in reversed(lines[-20:]):
+                task_match = re.search(r'(\d+) tasks running', line)
+                if task_match:
+                    stats["tasks"] = task_match.group(1)
+                    break
     except: pass
     return stats
 
+def format_duration_long(seconds):
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    parts = []
+    if h > 0: parts.append(f"{h} hour{'s' if h > 1 else ''}")
+    if m > 0: parts.append(f"{m} minute{'s' if m > 1 else ''}")
+    if s > 0: parts.append(f"{s} second{'s' if s > 1 else ''}")
+    return ", ".join(parts) if parts else "0 seconds"
+
 def main():
-    # Setup config
     CONFIG = load_env(os.path.expanduser("~/lunaris/config.env"))
     bot = CIBot(CONFIG)
     log_file = "build.log"
     
-    # --- DYNAMIC SERVER CONFIG EXTRACTION ---
-    # Scrape variables set by 'lunch' or environment
+    # Environment Detection
     DEVICE = get_env_info('TARGET_DEVICE', 'lisaa')
     VARIANT = get_env_info('TARGET_BUILD_VARIANT', 'user')
-    RELEASE = get_env_info('TARGET_RELEASE', 'ap2a')
-    
-    # Android Version Fix (Checks for A16 specifically)
+    RELEASE = get_env_info('TARGET_RELEASE', 'bp4a')
     ANDROID_VER = get_env_info('PLATFORM_VERSION', '16')
-    
-    # ROM Name Detection (Scrapes 'TARGET_PRODUCT' or env)
-    # If TARGET_PRODUCT is 'lunaris_lisaa-user', it detects LunarisAOSP
-    TARGET_PROD = get_env_info('TARGET_PRODUCT', 'lunaris_lisaa')
-    ROM = "LunarisAOSP" if "lunaris" in TARGET_PROD.lower() else get_env_info('ROM_NAME', 'LunarisAOSP')
-    
-    # GMS Detection
-    GMS_ENV = get_env_info('WITH_GMS', 'false').lower()
-    GMS = str(CONFIG.get('WITH_GMS', GMS_ENV))
+    USER_NAME = os.getlogin()
+    ROM = "LunarisAOSP"
+    GMS = str(get_env_info('WITH_GMS', 'false')).lower()
 
-    print(f"\n{BOLD}{CYAN}# --- Build Started: {ROM} (Android {ANDROID_VER}) ---{RESET}")
-    
+    start_time_unix = time.time()
+    start_time_fmt = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p UTC+05:30")
+
     if os.path.exists(log_file): os.remove(log_file)
-    start_time = time.time()
-    
-    # Execution
-    # Note: No 'source' or 'lunch' here, we assume you already did that in the shell.
     compile_proc = subprocess.Popen(f"bash -c 'm bacon' 2>&1 | tee {log_file}", shell=True)
 
-    bot.edit_message(f"<b>⚙️ Build Initialization</b>\n<b>ROM:</b> {ROM}\n<b>Device:</b> {DEVICE}\n<b>Android:</b> {ANDROID_VER}")
-
     while compile_proc.poll() is None:
-        s = fetch_stats(log_file, start_time)
-        elapsed_raw = time.time() - start_time
-        elapsed = f"{int(elapsed_raw // 60)}m {int(elapsed_raw % 60)}s"
+        s = fetch_stats(log_file, start_time_unix)
+        elapsed_raw = time.time() - start_time_unix
+        em, es = divmod(int(elapsed_raw), 60)
         
         msg = (
-            f"<b>⚙️ Build In Progress ({s['tasks']} tasks)</b> for <b>{ROM} on {DEVICE}</b>\n"
-            f"👤 User: {os.getlogin()}\n"
-            f"📊 Progress: <code>{render_advanced_bar(s['percentage'])}</code> {s['percentage']}%\n"
-            f"<b>Actions:</b> <code>{s['done']}/{s['total']}</code>\n"
-            f"⏳ <b>Elapsed:</b> <code>{elapsed}</code>\n"
-            f"🕒 <b>ETA:</b> <code>{s['eta']}</code>\n\n"
-            f"<b>🔧 Configuration:</b>\n"
-            f"<b>Variant:</b> <code>{VARIANT}</code>\n"
-            f"<b>Android Version:</b> <code>{ANDROID_VER}</code>\n"
-            f"<b>Release:</b> <code>{RELEASE}</code>\n"
-            f"<b>GMS:</b> <code>{GMS}</code>\n\n"
+            f"⚙️ <b>Build In Progress ({s['tasks']} tasks)</b> for <b>{ROM} on {DEVICE}</b>\n"
+            f"👤 User: {USER_NAME}\n"
+            f"📊 Progress: <code>{render_advanced_bar(s['percentage'])}</code>\n"
+            f"{s['percentage']}%\n"
+            f"Actions: {s['done']}/{s['total']}\n"
+            f"⌛ Elapsed: {em}m {es}s\n"
+            f"⌚ ETA: {s['eta']}\n\n"
+            f"🔧 <b>Configuration:</b>\n"
+            f"Variant: <code>{VARIANT}</code>\n"
+            f"Android Version: <code>{ANDROID_VER}</code>\n"
+            f"Release: <code>{RELEASE}</code>\n"
+            f"GMS: <code>{GMS}</code>\n\n"
             f"<i>My code is compiling, so I must be working... right?</i> 💻"
         )
         bot.edit_message(msg)
         time.sleep(30)
 
     # Final Result
-    duration = f"{int((time.time() - start_time) // 60)}m {int((time.time() - start_time) % 60)}s"
+    final_stats = fetch_stats(log_file, start_time_unix)
+    duration = format_duration_long(time.time() - start_time_unix)
+    
     if compile_proc.returncode == 0:
-        bot.edit_message(f"<b>✅ Build Successful</b>\n<b>ROM:</b> {ROM}\n<b>Time:</b> {duration}", show_button=False)
+        success_msg = (
+            f"✅ <b>Build Successful for {ROM} on {DEVICE}</b>\n"
+            f"<b>Duration:</b> {duration}\n"
+            f"<b>Android:</b> {ANDROID_VER}"
+        )
+        bot.edit_message(success_msg, show_button=False)
     else:
-        bot.edit_message(f"<b>❌ Build Failed</b>\n<b>ROM:</b> {ROM}\n<b>Time:</b> {duration}", show_button=False)
+        fail_msg = (
+            f"❌ <b>Build Failed for {ROM} on {DEVICE}</b>\n"
+            f"<b>User:</b> {USER_NAME}\n"
+            f"<b>Started:</b> {start_time_fmt}\n"
+            f"<b>Duration:</b> {duration}\n"
+            f"📊 <b>Build Stats:</b> {final_stats['done']}/{final_stats['total']} actions (1 failed)\n"
+            f"🔧 <b>Configuration:</b>\n"
+            f"  • Variant: <code>{VARIANT}</code>\n"
+            f"  • Type: release\n"
+            f"  • Release: <code>{RELEASE}</code>\n"
+            f"  • GMS: <code>{GMS}</code>\n\n"
+            f"📄 Check logs for details. Error log uploaded if available."
+        )
+        bot.edit_message(fail_msg, show_button=False)
+        if os.path.exists(log_file):
+            bot.send_document(log_file)
+
+    if CONFIG.get('POWEROFF') == 'true':
+        os.system("sudo poweroff")
 
 if __name__ == "__main__":
     main()
