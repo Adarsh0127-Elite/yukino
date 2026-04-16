@@ -5,8 +5,15 @@
 BOT_TOKEN="8786141502:AAE_Zpl9G_V2bMC7wXhhwfGFcAW0nM4mVRM"
 CHAT_ID="6155015997"
 
-# Build Details: Imports from server env var or falls back to the system user
+# Build Details: Pulls from env vars exported by your main CI script
+BUILD_ROM_NAME="${BUILD_ROM:-ROM}"
 USER_NAME="${BUILD_USER:-$(whoami)}"
+START_TIME="${BUILD_START_TIME:-Unknown}"
+FINAL_DURATION="${BUILD_DURATION:-Unknown}"
+STATS="${BUILD_STATS:-Unknown}"
+VARIANT="${BUILD_VARIANT:-Unknown}"
+BTYPE="${BUILD_TYPE:-Unknown}"
+RELEASE="${BUILD_RELEASE:-Unknown}"
 
 # ================= Internal Config =================
 PRODUCT_BASE="out/target/product"
@@ -33,7 +40,6 @@ send_telegram_text() {
 generate_buttons() {
     local buttons=""
     
-    # Truncate the zip name to 18 characters so it doesn't stretch the buttons
     local short_zip="${ZIP_NAME}"
     if [[ ${#short_zip} -gt 18 ]]; then
         short_zip="${short_zip:0:18}..."
@@ -42,23 +48,23 @@ generate_buttons() {
     if [[ "$BOOT_LINK" != "N/A" ]]; then
         buttons+="[{\"text\": \"🔗 $(escape_html "boot.img ($BOOT_SIZE)")\", \"url\": \"$BOOT_LINK\"}],"
     fi
-    
     if [[ "$VENDOR_BOOT_LINK" != "N/A" ]]; then
         buttons+="[{\"text\": \"🔗 $(escape_html "vendor_boot.img ($VENDOR_BOOT_SIZE)")\", \"url\": \"$VENDOR_BOOT_LINK\"}],"
     fi
-    
+    if [[ "$VBMETA_LINK" != "N/A" ]]; then
+        buttons+="[{\"text\": \"🔗 $(escape_html "vbmeta.img ($VBMETA_SIZE)")\", \"url\": \"$VBMETA_LINK\"}],"
+    fi
+    if [[ "$SUPER_EMPTY_LINK" != "N/A" ]]; then
+        buttons+="[{\"text\": \"🔗 $(escape_html "super_empty.img ($SUPER_EMPTY_SIZE)")\", \"url\": \"$SUPER_EMPTY_LINK\"}],"
+    fi
     if [[ "$DTBO_LINK" != "N/A" ]]; then
         buttons+="[{\"text\": \"🔗 $(escape_html "dtbo.img ($DTBO_SIZE)")\", \"url\": \"$DTBO_LINK\"}],"
     fi
-    
     if [[ "$ROM_LINK" != "N/A" ]]; then
         buttons+="[{\"text\": \"🔗 $(escape_html "${short_zip} ($ROM_SIZE)")\", \"url\": \"$ROM_LINK\"}],"
     fi
     
-    # Remove the trailing comma from the end of the string
     buttons="${buttons%,}"
-    
-    # Wrap the rows in the main inline_keyboard array
     echo "{\"inline_keyboard\": [$buttons]}"
 }
 
@@ -99,10 +105,14 @@ ZIP_NAME=$(basename "$ROM_ZIP")
 # ================= Image Detection =================
 BOOT_IMG="$PRODUCT_DIR/boot.img"
 VENDOR_BOOT_IMG="$PRODUCT_DIR/vendor_boot.img"
+VBMETA_IMG="$PRODUCT_DIR/vbmeta.img"
+SUPER_EMPTY_IMG="$PRODUCT_DIR/super_empty.img"
 DTBO_IMG="$PRODUCT_DIR/dtbo.img"
 
 [[ ! -f "$BOOT_IMG" ]] && BOOT_IMG="N/A"
 [[ ! -f "$VENDOR_BOOT_IMG" ]] && VENDOR_BOOT_IMG="N/A"
+[[ ! -f "$VBMETA_IMG" ]] && VBMETA_IMG="N/A"
+[[ ! -f "$SUPER_EMPTY_IMG" ]] && SUPER_EMPTY_IMG="N/A"
 [[ ! -f "$DTBO_IMG" ]] && DTBO_IMG="N/A"
 
 # ================= File Info Calculation =================
@@ -142,11 +152,15 @@ get_sha256() {
 ROM_SIZE=$(fmt_size "$ROM_ZIP")
 BOOT_SIZE=$(fmt_size "$BOOT_IMG")
 VENDOR_BOOT_SIZE=$(fmt_size "$VENDOR_BOOT_IMG")
+VBMETA_SIZE=$(fmt_size "$VBMETA_IMG")
+SUPER_EMPTY_SIZE=$(fmt_size "$SUPER_EMPTY_IMG")
 DTBO_SIZE=$(fmt_size "$DTBO_IMG")
 
 ROM_SHA256=$(get_sha256 "$ROM_ZIP")
 BOOT_SHA256=$(get_sha256 "$BOOT_IMG")
 VENDOR_BOOT_SHA256=$(get_sha256 "$VENDOR_BOOT_IMG")
+VBMETA_SHA256=$(get_sha256 "$VBMETA_IMG")
+SUPER_EMPTY_SHA256=$(get_sha256 "$SUPER_EMPTY_IMG")
 DTBO_SHA256=$(get_sha256 "$DTBO_IMG")
 
 # ================= GoFile Upload Logic =================
@@ -163,6 +177,8 @@ upload() {
 upload "$ROM_ZIP" > "$TMP_DIR/rom" &
 upload "$BOOT_IMG" > "$TMP_DIR/boot" &
 upload "$VENDOR_BOOT_IMG" > "$TMP_DIR/vendor_boot" &
+upload "$VBMETA_IMG" > "$TMP_DIR/vbmeta" &
+upload "$SUPER_EMPTY_IMG" > "$TMP_DIR/super_empty" &
 upload "$DTBO_IMG" > "$TMP_DIR/dtbo" &
 
 wait
@@ -170,6 +186,8 @@ wait
 ROM_LINK=$(cat "$TMP_DIR/rom")
 BOOT_LINK=$(cat "$TMP_DIR/boot")
 VENDOR_BOOT_LINK=$(cat "$TMP_DIR/vendor_boot")
+VBMETA_LINK=$(cat "$TMP_DIR/vbmeta")
+SUPER_EMPTY_LINK=$(cat "$TMP_DIR/super_empty")
 DTBO_LINK=$(cat "$TMP_DIR/dtbo")
 
 rm -rf "$TMP_DIR"
@@ -178,11 +196,10 @@ rm -rf "$TMP_DIR"
 log "--------------------------------------------------"
 log "Sending UI notification..."
 
-FINAL_DURATION="${BUILD_DURATION:-"Unknown"}"
-
 ARTIFACTS_TEXT=""
 COUNTER=1
 
+# Formatted with strict 3-space indentation to match video
 add_artifact() {
     local name="$1"
     local size="$2"
@@ -190,27 +207,37 @@ add_artifact() {
     local type="IMG"
     [[ "$name" == *.zip ]] && type="ZIP"
     
-    ARTIFACTS_TEXT+="${COUNTER}. <b>File:</b> <code>${name}</code>
-   <b>Type:</b> ${type} | <b>Size:</b> ${size}
-   <b>SHA256:</b>
-<code>${sha}</code>
+    ARTIFACTS_TEXT+="${COUNTER}. File: ${name}
+   Type: ${type} | Size: ${size}
+   SHA256: ${sha}
 "
     ((COUNTER++))
 }
 
+# Ordered roughly as they appear in standard AOSP outputs/video
 add_artifact "$ZIP_NAME" "$ROM_SIZE" "$ROM_SHA256"
-[[ "$BOOT_IMG" != "N/A" ]] && add_artifact "boot.img" "$BOOT_SIZE" "$BOOT_SHA256"
 [[ "$VENDOR_BOOT_IMG" != "N/A" ]] && add_artifact "vendor_boot.img" "$VENDOR_BOOT_SIZE" "$VENDOR_BOOT_SHA256"
+[[ "$VBMETA_IMG" != "N/A" ]] && add_artifact "vbmeta.img" "$VBMETA_SIZE" "$VBMETA_SHA256"
+[[ "$SUPER_EMPTY_IMG" != "N/A" ]] && add_artifact "super_empty.img" "$SUPER_EMPTY_SIZE" "$SUPER_EMPTY_SHA256"
+[[ "$BOOT_IMG" != "N/A" ]] && add_artifact "boot.img" "$BOOT_SIZE" "$BOOT_SHA256"
 [[ "$DTBO_IMG" != "N/A" ]] && add_artifact "dtbo.img" "$DTBO_SIZE" "$DTBO_SHA256"
 
+# Removes trailing newline from blockquote
+ARTIFACTS_TEXT=$(echo -n "$ARTIFACTS_TEXT" | sed '$d')
+
 MESSAGE_TEXT=$(cat <<EOF
-✅ <b>Build Completed on ${DEVICE}</b>
+✅ Build Completed for ${BUILD_ROM_NAME} on ${DEVICE}
+User: ${USER_NAME}
+Started: ${START_TIME}
+Duration: ${FINAL_DURATION}
+📊 Build Stats: ${STATS} actions
+⚙️ Configuration:
+• Variant: ${VARIANT}
+• Type: ${BTYPE}
+• Release: ${RELEASE}
 
-<b>User:</b> ${USER_NAME}
-<b>Duration:</b> ${FINAL_DURATION}
-
-🎉 <b>Build Artifact(s) Uploaded:</b>
-${ARTIFACTS_TEXT}
+🎉 Build Artifact(s) Uploaded:
+<blockquote><code>${ARTIFACTS_TEXT}</code></blockquote>
 EOF
 )
 
