@@ -5,7 +5,7 @@
 BOT_TOKEN="8786141502:AAE_Zpl9G_V2bMC7wXhhwfGFcAW0nM4mVRM"
 CHAT_ID="6155015997"
 
-# Build Details
+# Build Details (Set these dynamically in your CI pipeline)
 USER_NAME="Adarsh"
 
 # ================= Internal Config =================
@@ -30,29 +30,33 @@ send_telegram_text() {
 }
 
 generate_buttons() {
-    local rom_label=$(escape_html "${ZIP_NAME} ($ROM_SIZE)")
-    local boot_label=$(escape_html "boot.img ($BOOT_SIZE)")
-    local vendor_boot_label=$(escape_html "vendor_boot.img ($VENDOR_BOOT_SIZE)")
-    local dtbo_label=$(escape_html "dtbo.img ($DTBO_SIZE)")
-
-    local markup=$(cat <<EOF
-{
-  "inline_keyboard": [
-    [
-      { "text": "${boot_label}", "url": "${BOOT_LINK}" },
-      { "text": "${vendor_boot_label}", "url": "${VENDOR_BOOT_LINK}" }
-    ],
-    [
-      { "text": "${dtbo_label}", "url": "${DTBO_LINK}" }
-    ],
-    [
-      { "text": "${rom_label}", "url": "${ROM_LINK}" }
-    ]
-  ]
-}
-EOF
-)
-    echo "$markup"
+    local buttons=""
+    
+    # Row 1: Boot & Vendor Boot
+    local row1=""
+    if [[ "$BOOT_LINK" != "N/A" ]]; then
+        row1+="{\"text\": \"$(escape_html "boot.img ($BOOT_SIZE)")\", \"url\": \"$BOOT_LINK\"}"
+    fi
+    if [[ "$VENDOR_BOOT_LINK" != "N/A" ]]; then
+        [[ -n "$row1" ]] && row1+=", "
+        row1+="{\"text\": \"$(escape_html "vendor_boot.img ($VENDOR_BOOT_SIZE)")\", \"url\": \"$VENDOR_BOOT_LINK\"}"
+    fi
+    [[ -n "$row1" ]] && buttons+="[$row1],"
+    
+    # Row 2: DTBO
+    if [[ "$DTBO_LINK" != "N/A" ]]; then
+        buttons+="[{\"text\": \"$(escape_html "dtbo.img ($DTBO_SIZE)")\", \"url\": \"$DTBO_LINK\"}],"
+    fi
+    
+    # Row 3: ROM
+    if [[ "$ROM_LINK" != "N/A" ]]; then
+        buttons+="[{\"text\": \"$(escape_html "${ZIP_NAME} ($ROM_SIZE)")\", \"url\": \"$ROM_LINK\"}],"
+    fi
+    
+    # Remove trailing comma
+    buttons="${buttons%,}"
+    
+    echo "{\"inline_keyboard\": [$buttons]}"
 }
 
 # ================= Logging =================
@@ -72,10 +76,6 @@ PRODUCT_DIR="$PRODUCT_BASE/$DEVICE"
 
 if [[ -z "$DEVICE" || ! -d "$PRODUCT_DIR" ]]; then
     log "ERROR: Device directory not detected"
-    curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-        -d chat_id="${CHAT_ID}" \
-        -d text="❌ <b>Build Upload Failed</b>%0ADevice directory not detected." \
-        -d parse_mode="HTML" > /dev/null
     exit 1
 fi
 
@@ -88,30 +88,71 @@ ROM_ZIP=$(find "$PRODUCT_DIR" -type f -name "*${DEVICE}*.zip" \
 
 if [[ ! -f "$ROM_ZIP" ]]; then
     log "ERROR: ROM ZIP not found"
-    curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-        -d chat_id="${CHAT_ID}" \
-        -d text="❌ <b>Build Upload Failed</b>%0AROM ZIP not found." \
-        -d parse_mode="HTML" > /dev/null
     exit 1
 fi
+
+ZIP_NAME=$(basename "$ROM_ZIP")
 
 # ================= Image Detection =================
 BOOT_IMG="$PRODUCT_DIR/boot.img"
 VENDOR_BOOT_IMG="$PRODUCT_DIR/vendor_boot.img"
 DTBO_IMG="$PRODUCT_DIR/dtbo.img"
 
-if [[ ! -f "$BOOT_IMG" ]]; then BOOT_IMG="N/A"; fi
-if [[ ! -f "$VENDOR_BOOT_IMG" ]]; then VENDOR_BOOT_IMG="N/A"; fi
-if [[ ! -f "$DTBO_IMG" ]]; then DTBO_IMG="N/A"; fi
+[[ ! -f "$BOOT_IMG" ]] && BOOT_IMG="N/A"
+[[ ! -f "$VENDOR_BOOT_IMG" ]] && VENDOR_BOOT_IMG="N/A"
+[[ ! -f "$DTBO_IMG" ]] && DTBO_IMG="N/A"
+
+# ================= File Info Calculation =================
+log "Calculating hashes and exact UI sizes..."
+
+fmt_size() {
+    local file="$1"
+    if [[ "$file" == "N/A" || ! -f "$file" ]]; then
+        echo "N/A"
+        return
+    fi
+    
+    # Use stat to get exact bytes, then awk to format as GiB/MiB
+    local bytes=$(stat -c%s "$file")
+    awk -v b="$bytes" '
+    BEGIN {
+        if (b >= 1073741824) { val = b/1073741824; unit = "GiB" }
+        else if (b >= 1048576) { val = b/1048576; unit = "MiB" }
+        else if (b >= 1024) { val = b/1024; unit = "KiB" }
+        else { val = b; unit = "B" }
+        
+        if (val == int(val)) {
+            printf "%d %s", val, unit
+        } else {
+            printf "%.2f %s", val, unit
+        }
+    }'
+}
+
+get_sha256() {
+    if [[ "$1" == "N/A" || ! -f "$1" ]]; then
+        echo "N/A"
+    else
+        sha256sum "$1" | awk '{print $1}'
+    fi
+}
+
+ROM_SIZE=$(fmt_size "$ROM_ZIP")
+BOOT_SIZE=$(fmt_size "$BOOT_IMG")
+VENDOR_BOOT_SIZE=$(fmt_size "$VENDOR_BOOT_IMG")
+DTBO_SIZE=$(fmt_size "$DTBO_IMG")
+
+ROM_SHA256=$(get_sha256 "$ROM_ZIP")
+BOOT_SHA256=$(get_sha256 "$BOOT_IMG")
+VENDOR_BOOT_SHA256=$(get_sha256 "$VENDOR_BOOT_IMG")
+DTBO_SHA256=$(get_sha256 "$DTBO_IMG")
 
 # ================= GoFile Upload Logic =================
 log "--------------------------------------------------"
 log "Uploading artifacts to GoFile (parallel)..."
 
 upload() {
-    [[ "$1" == "N/A" ]] && { echo "N/A"; return; }
-    [[ -f "$1" ]] || { echo "N/A"; return; }
-
+    [[ "$1" == "N/A" || ! -f "$1" ]] && { echo "N/A"; return; }
     SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
     curl -s -F "file=@$1" "https://${SERVER}.gofile.io/uploadFile" \
         | jq -r '.data.downloadPage' 2>/dev/null
@@ -129,41 +170,38 @@ BOOT_LINK=$(cat "$TMP_DIR/boot")
 VENDOR_BOOT_LINK=$(cat "$TMP_DIR/vendor_boot")
 DTBO_LINK=$(cat "$TMP_DIR/dtbo")
 
-if [[ -z "$ROM_LINK" ]]; then ROM_LINK="N/A"; fi
-if [[ -z "$BOOT_LINK" ]]; then BOOT_LINK="N/A"; fi
-if [[ -z "$VENDOR_BOOT_LINK" ]]; then VENDOR_BOOT_LINK="N/A"; fi
-if [[ -z "$DTBO_LINK" ]]; then DTBO_LINK="N/A"; fi
-
 rm -rf "$TMP_DIR"
-
-# ================= File Info Calculation =================
-log "Calculating hashes and sizes..."
-
-fmt_size() {
-    du -h "$1" | awk '{print $1}'
-}
-
-ROM_SIZE=$(fmt_size "$ROM_ZIP")
-BOOT_SIZE=$(fmt_size "$BOOT_IMG")
-VENDOR_BOOT_SIZE=$(fmt_size "$VENDOR_BOOT_IMG")
-DTBO_SIZE=$(fmt_size "$DTBO_IMG")
-
-ROM_SHA256=$(sha256sum "$ROM_ZIP" | awk '{print $1}')
-BOOT_SHA256=$(sha256sum "$BOOT_IMG" | awk '{print $1}' 2>/dev/null || echo "N/A")
-VENDOR_BOOT_SHA256=$(sha256sum "$VENDOR_BOOT_IMG" | awk '{print $1}' 2>/dev/null || echo "N/A")
-DTBO_SHA256=$(sha256sum "$DTBO_IMG" | awk '{print $1}' 2>/dev/null || echo "N/A")
-
-ZIP_NAME=$(basename "$ROM_ZIP")
-
-# ================= Time & Duration Integration =================
-# Grabs the exported variables from the parent CI script.
-# If they are empty/missing, it falls back to "Unknown" to prevent UI breakage.
-FINAL_START_TIME="${START_TIME_STR:-"Unknown"}"
-FINAL_DURATION="${DURATION_STR:-"Unknown"}"
 
 # ================= Telegram UI Construction =================
 log "--------------------------------------------------"
 log "Sending UI notification..."
+
+FINAL_START_TIME="${START_TIME_STR:-"Unknown"}"
+FINAL_DURATION="${DURATION_STR:-"Unknown"}"
+
+# Dynamically construct the artifact list text so numbering stays sequential
+ARTIFACTS_TEXT=""
+COUNTER=1
+
+add_artifact() {
+    local name="$1"
+    local size="$2"
+    local sha="$3"
+    local type="IMG"
+    [[ "$name" == *.zip ]] && type="ZIP"
+    
+    ARTIFACTS_TEXT+="${COUNTER}. <b>File:</b> <code>${name}</code>
+   <b>Type:</b> ${type} | <b>Size:</b> ${size}
+   <b>SHA256:</b>
+<code>${sha}</code>
+"
+    ((COUNTER++))
+}
+
+add_artifact "$ZIP_NAME" "$ROM_SIZE" "$ROM_SHA256"
+[[ "$BOOT_IMG" != "N/A" ]] && add_artifact "boot.img" "$BOOT_SIZE" "$BOOT_SHA256"
+[[ "$VENDOR_BOOT_IMG" != "N/A" ]] && add_artifact "vendor_boot.img" "$VENDOR_BOOT_SIZE" "$VENDOR_BOOT_SHA256"
+[[ "$DTBO_IMG" != "N/A" ]] && add_artifact "dtbo.img" "$DTBO_SIZE" "$DTBO_SHA256"
 
 MESSAGE_TEXT=$(cat <<EOF
 ✅ <b>Build Completed on ${DEVICE}</b>
@@ -173,22 +211,7 @@ MESSAGE_TEXT=$(cat <<EOF
 <b>Duration:</b> ${FINAL_DURATION}
 
 🎉 <b>Build Artifact(s) Uploaded:</b>
-1. <b>File:</b> <code>${ZIP_NAME}</code>
-   <b>Type:</b> ZIP | <b>Size:</b> ${ROM_SIZE}
-   <b>SHA256:</b>
-<code>${ROM_SHA256}</code>
-2. <b>File:</b> <code>boot.img</code>
-   <b>Type:</b> IMG | <b>Size:</b> ${BOOT_SIZE}
-   <b>SHA256:</b>
-<code>${BOOT_SHA256}</code>
-3. <b>File:</b> <code>vendor_boot.img</code>
-   <b>Type:</b> IMG | <b>Size:</b> ${VENDOR_BOOT_SIZE}
-   <b>SHA256:</b>
-<code>${VENDOR_BOOT_SHA256}</code>
-4. <b>File:</b> <code>dtbo.img</code>
-   <b>Type:</b> IMG | <b>Size:</b> ${DTBO_SIZE}
-   <b>SHA256:</b>
-<code>${DTBO_SHA256}</code>
+${ARTIFACTS_TEXT}
 EOF
 )
 
