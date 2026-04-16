@@ -29,33 +29,30 @@ send_telegram_text() {
         -d parse_mode="HTML" > /dev/null
 }
 
+# Updated to put each button in its own row (Vertical layout) with Link Emoji
 generate_buttons() {
     local buttons=""
     
-    # Row 1: Boot & Vendor Boot
-    local row1=""
     if [[ "$BOOT_LINK" != "N/A" ]]; then
-        row1+="{\"text\": \"$(escape_html "boot.img ($BOOT_SIZE)")\", \"url\": \"$BOOT_LINK\"}"
+        buttons+="[{\"text\": \"🔗 $(escape_html "boot.img ($BOOT_SIZE)")\", \"url\": \"$BOOT_LINK\"}],"
     fi
+    
     if [[ "$VENDOR_BOOT_LINK" != "N/A" ]]; then
-        [[ -n "$row1" ]] && row1+=", "
-        row1+="{\"text\": \"$(escape_html "vendor_boot.img ($VENDOR_BOOT_SIZE)")\", \"url\": \"$VENDOR_BOOT_LINK\"}"
+        buttons+="[{\"text\": \"🔗 $(escape_html "vendor_boot.img ($VENDOR_BOOT_SIZE)")\", \"url\": \"$VENDOR_BOOT_LINK\"}],"
     fi
-    [[ -n "$row1" ]] && buttons+="[$row1],"
     
-    # Row 2: DTBO
     if [[ "$DTBO_LINK" != "N/A" ]]; then
-        buttons+="[{\"text\": \"$(escape_html "dtbo.img ($DTBO_SIZE)")\", \"url\": \"$DTBO_LINK\"}],"
+        buttons+="[{\"text\": \"🔗 $(escape_html "dtbo.img ($DTBO_SIZE)")\", \"url\": \"$DTBO_LINK\"}],"
     fi
     
-    # Row 3: ROM
     if [[ "$ROM_LINK" != "N/A" ]]; then
-        buttons+="[{\"text\": \"$(escape_html "${ZIP_NAME} ($ROM_SIZE)")\", \"url\": \"$ROM_LINK\"}],"
+        buttons+="[{\"text\": \"🔗 $(escape_html "${ZIP_NAME} ($ROM_SIZE)")\", \"url\": \"$ROM_LINK\"}],"
     fi
     
-    # Remove trailing comma
+    # Remove the trailing comma from the end of the string
     buttons="${buttons%,}"
     
+    # Wrap the rows in the main inline_keyboard array
     echo "{\"inline_keyboard\": [$buttons]}"
 }
 
@@ -175,10 +172,8 @@ rm -rf "$TMP_DIR"
 log "--------------------------------------------------"
 log "Sending UI notification..."
 
-# Import duration from the parent CI script. Falls back to "Unknown" if not exported.
 FINAL_DURATION="${BUILD_DURATION:-"Unknown"}"
 
-# Dynamically construct the artifact list text
 ARTIFACTS_TEXT=""
 COUNTER=1
 
