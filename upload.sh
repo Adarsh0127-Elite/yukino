@@ -6,7 +6,7 @@ BOT_TOKEN="8786141502:AAE_Zpl9G_V2bMC7wXhhwfGFcAW0nM4mVRM"
 CHAT_ID="6155015997"
 
 # Build Details: Pulls from env vars exported by your main CI script
-BUILD_ROM_NAME="${BUILD_ROM:-ROM}"
+BUILD_ROM_NAME="${BUILD_ROM:-ROM}" # Kept ONLY for the image detection logic
 USER_NAME="${BUILD_USER:-$(whoami)}"
 FINAL_DURATION="${BUILD_DURATION:-Unknown}"
 BUILD_DEVICE="${BUILD_DEVICE:-}" 
@@ -15,21 +15,49 @@ BUILD_DEVICE="${BUILD_DEVICE:-}"
 PRODUCT_BASE="out/target/product"
 TMP_DIR=$(mktemp -d)
 
+# ================= Dynamic ROM Images =================
+get_rom_image() {
+    # Convert ROM name to lowercase for easy matching
+    local rom_lower=$(echo "$BUILD_ROM_NAME" | tr '[:upper:]' '[:lower:]')
+    
+    if [[ "$rom_lower" == *"lunaris"* ]]; then
+        echo "https://raw.githubusercontent.com/Adarsh0127-Elite/yukino/main/media/lunaris_banner.png"
+    elif [[ "$rom_lower" == *"axion"* ]]; then
+        echo "https://raw.githubusercontent.com/Adarsh0127-Elite/yukino/main/media/axion_banner.png"
+    elif [[ "$rom_lower" == *"matrixx"* ]]; then
+        echo "https://raw.githubusercontent.com/Adarsh0127-Elite/yukino/main/media/matrixx_banner.png"
+    else
+        echo "" # Returns empty if no match is found
+    fi
+}
+
 # ================= Telegram Functions =================
 escape_html() {
     local text="$1"
     echo "$text" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&#39;/g'
 }
 
-send_telegram_text() {
+send_telegram_notification() {
     local text="$1"
     local reply_markup="$2"
+    local photo_url="$(get_rom_image)"
 
-    curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-        -d chat_id="${CHAT_ID}" \
-        -d text="${text}" \
-        -d reply_markup="${reply_markup}" \
-        -d parse_mode="HTML" > /dev/null
+    if [[ -n "$photo_url" ]]; then
+        # If an image URL is found, send as a photo with a caption
+        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+            -d chat_id="${CHAT_ID}" \
+            -d photo="${photo_url}" \
+            -d caption="${text}" \
+            -d reply_markup="${reply_markup}" \
+            -d parse_mode="HTML" > /dev/null
+    else
+        # Fallback to standard text message if no image matches
+        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" \
+            -d text="${text}" \
+            -d reply_markup="${reply_markup}" \
+            -d parse_mode="HTML" > /dev/null
+    fi
 }
 
 # Generates vertical buttons with Link Emoji and truncates long ROM names
@@ -206,7 +234,7 @@ add_artifact "$ZIP_NAME" "$ROM_SIZE" "$ROM_SHA256"
 ARTIFACTS_TEXT=$(echo -n "$ARTIFACTS_TEXT" | sed '$d')
 
 MESSAGE_TEXT=$(cat <<EOF
-✅ Build Completed for ${BUILD_ROM_NAME} on ${DEVICE}
+✅ <b>Build Completed for ${DEVICE}</b>
 User: ${USER_NAME}
 Duration: ${FINAL_DURATION}
 
@@ -217,7 +245,7 @@ EOF
 
 REPLY_MARKUP_JSON=$(generate_buttons)
 
-send_telegram_text "$MESSAGE_TEXT" "$REPLY_MARKUP_JSON"
+send_telegram_notification "$MESSAGE_TEXT" "$REPLY_MARKUP_JSON"
 
 log "UI notification sent."
 log "--------------------------------------------------"
