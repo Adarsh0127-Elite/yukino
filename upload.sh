@@ -2,11 +2,13 @@
 
 # ================= Configuration =================
 # Telegram credentials
-BOT_TOKEN="8786141502:AAE_Zpl9G_V2bMC7wXhhwfGFcAW0nM4mVRM"
-CHAT_ID="6155015997"
+BOT_TOKEN="BOT_TOKEN"
+
+# Add multiple Chat IDs separated by a space (e.g., "6155015997 -100123456789 987654321")
+CHAT_IDS="CHAT_ID"
 
 # Build Details: Pulls from env vars exported by your main CI script
-BUILD_ROM_NAME="${BUILD_ROM:-ROM}" # Kept ONLY for the image detection logic
+BUILD_ROM_NAME="${BUILD_ROM:-ROM}"
 USER_NAME="${BUILD_USER:-$(whoami)}"
 FINAL_DURATION="${BUILD_DURATION:-Unknown}"
 BUILD_DEVICE="${BUILD_DEVICE:-}" 
@@ -42,22 +44,25 @@ send_telegram_notification() {
     local reply_markup="$2"
     local photo_url="$(get_rom_image)"
 
-    if [[ -n "$photo_url" ]]; then
-        # If an image URL is found, send as a photo with a caption
-        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-            -d chat_id="${CHAT_ID}" \
-            -d photo="${photo_url}" \
-            -d caption="${text}" \
-            -d reply_markup="${reply_markup}" \
-            -d parse_mode="HTML" > /dev/null
-    else
-        # Fallback to standard text message if no image matches
-        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" \
-            -d text="${text}" \
-            -d reply_markup="${reply_markup}" \
-            -d parse_mode="HTML" > /dev/null
-    fi
+    # Loop through each Chat ID and send the notification
+    for id in $CHAT_IDS; do
+        if [[ -n "$photo_url" ]]; then
+            # If an image URL is found, send as a photo with a caption
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                -d chat_id="${id}" \
+                -d photo="${photo_url}" \
+                -d caption="${text}" \
+                -d reply_markup="${reply_markup}" \
+                -d parse_mode="HTML" > /dev/null
+        else
+            # Fallback to standard text message if no image matches
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                -d chat_id="${id}" \
+                -d text="${text}" \
+                -d reply_markup="${reply_markup}" \
+                -d parse_mode="HTML" > /dev/null
+        fi
+    done
 }
 
 # Generates vertical buttons with Link Emoji and truncates long ROM names
