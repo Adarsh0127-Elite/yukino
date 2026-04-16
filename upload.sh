@@ -9,9 +9,6 @@ CHAT_ID="6155015997"
 BUILD_ROM_NAME="${BUILD_ROM:-ROM}"
 USER_NAME="${BUILD_USER:-$(whoami)}"
 FINAL_DURATION="${BUILD_DURATION:-Unknown}"
-VARIANT="${BUILD_VARIANT:-Unknown}"
-BTYPE="${BUILD_TYPE:-Unknown}"
-RELEASE="${BUILD_RELEASE:-Unknown}"
 BUILD_DEVICE="${BUILD_DEVICE:-}" 
 
 # ================= Internal Config =================
@@ -49,12 +46,6 @@ generate_buttons() {
     fi
     if [[ "$VENDOR_BOOT_LINK" != "N/A" ]]; then
         buttons+="[{\"text\": \"🔗 $(escape_html "vendor_boot.img ($VENDOR_BOOT_SIZE)")\", \"url\": \"$VENDOR_BOOT_LINK\"}],"
-    fi
-    if [[ "$VBMETA_LINK" != "N/A" ]]; then
-        buttons+="[{\"text\": \"🔗 $(escape_html "vbmeta.img ($VBMETA_SIZE)")\", \"url\": \"$VBMETA_LINK\"}],"
-    fi
-    if [[ "$SUPER_EMPTY_LINK" != "N/A" ]]; then
-        buttons+="[{\"text\": \"🔗 $(escape_html "super_empty.img ($SUPER_EMPTY_SIZE)")\", \"url\": \"$SUPER_EMPTY_LINK\"}],"
     fi
     if [[ "$DTBO_LINK" != "N/A" ]]; then
         buttons+="[{\"text\": \"🔗 $(escape_html "dtbo.img ($DTBO_SIZE)")\", \"url\": \"$DTBO_LINK\"}],"
@@ -109,14 +100,10 @@ ZIP_NAME=$(basename "$ROM_ZIP")
 # ================= Image Detection =================
 BOOT_IMG="$PRODUCT_DIR/boot.img"
 VENDOR_BOOT_IMG="$PRODUCT_DIR/vendor_boot.img"
-VBMETA_IMG="$PRODUCT_DIR/vbmeta.img"
-SUPER_EMPTY_IMG="$PRODUCT_DIR/super_empty.img"
 DTBO_IMG="$PRODUCT_DIR/dtbo.img"
 
 [[ ! -f "$BOOT_IMG" ]] && BOOT_IMG="N/A"
 [[ ! -f "$VENDOR_BOOT_IMG" ]] && VENDOR_BOOT_IMG="N/A"
-[[ ! -f "$VBMETA_IMG" ]] && VBMETA_IMG="N/A"
-[[ ! -f "$SUPER_EMPTY_IMG" ]] && SUPER_EMPTY_IMG="N/A"
 [[ ! -f "$DTBO_IMG" ]] && DTBO_IMG="N/A"
 
 # ================= File Info Calculation =================
@@ -156,15 +143,11 @@ get_sha256() {
 ROM_SIZE=$(fmt_size "$ROM_ZIP")
 BOOT_SIZE=$(fmt_size "$BOOT_IMG")
 VENDOR_BOOT_SIZE=$(fmt_size "$VENDOR_BOOT_IMG")
-VBMETA_SIZE=$(fmt_size "$VBMETA_IMG")
-SUPER_EMPTY_SIZE=$(fmt_size "$SUPER_EMPTY_IMG")
 DTBO_SIZE=$(fmt_size "$DTBO_IMG")
 
 ROM_SHA256=$(get_sha256 "$ROM_ZIP")
 BOOT_SHA256=$(get_sha256 "$BOOT_IMG")
 VENDOR_BOOT_SHA256=$(get_sha256 "$VENDOR_BOOT_IMG")
-VBMETA_SHA256=$(get_sha256 "$VBMETA_IMG")
-SUPER_EMPTY_SHA256=$(get_sha256 "$SUPER_EMPTY_IMG")
 DTBO_SHA256=$(get_sha256 "$DTBO_IMG")
 
 # ================= GoFile Upload Logic =================
@@ -181,8 +164,6 @@ upload() {
 upload "$ROM_ZIP" > "$TMP_DIR/rom" &
 upload "$BOOT_IMG" > "$TMP_DIR/boot" &
 upload "$VENDOR_BOOT_IMG" > "$TMP_DIR/vendor_boot" &
-upload "$VBMETA_IMG" > "$TMP_DIR/vbmeta" &
-upload "$SUPER_EMPTY_IMG" > "$TMP_DIR/super_empty" &
 upload "$DTBO_IMG" > "$TMP_DIR/dtbo" &
 
 wait
@@ -190,8 +171,6 @@ wait
 ROM_LINK=$(cat "$TMP_DIR/rom")
 BOOT_LINK=$(cat "$TMP_DIR/boot")
 VENDOR_BOOT_LINK=$(cat "$TMP_DIR/vendor_boot")
-VBMETA_LINK=$(cat "$TMP_DIR/vbmeta")
-SUPER_EMPTY_LINK=$(cat "$TMP_DIR/super_empty")
 DTBO_LINK=$(cat "$TMP_DIR/dtbo")
 
 rm -rf "$TMP_DIR"
@@ -203,7 +182,7 @@ log "Sending UI notification..."
 ARTIFACTS_TEXT=""
 COUNTER=1
 
-# Formatted with strict 3-space indentation to match video
+# Formatted with strict 3-space indentation
 add_artifact() {
     local name="$1"
     local size="$2"
@@ -218,11 +197,8 @@ add_artifact() {
     ((COUNTER++))
 }
 
-# Ordered roughly as they appear in standard AOSP outputs/video
 add_artifact "$ZIP_NAME" "$ROM_SIZE" "$ROM_SHA256"
 [[ "$VENDOR_BOOT_IMG" != "N/A" ]] && add_artifact "vendor_boot.img" "$VENDOR_BOOT_SIZE" "$VENDOR_BOOT_SHA256"
-[[ "$VBMETA_IMG" != "N/A" ]] && add_artifact "vbmeta.img" "$VBMETA_SIZE" "$VBMETA_SHA256"
-[[ "$SUPER_EMPTY_IMG" != "N/A" ]] && add_artifact "super_empty.img" "$SUPER_EMPTY_SIZE" "$SUPER_EMPTY_SHA256"
 [[ "$BOOT_IMG" != "N/A" ]] && add_artifact "boot.img" "$BOOT_SIZE" "$BOOT_SHA256"
 [[ "$DTBO_IMG" != "N/A" ]] && add_artifact "dtbo.img" "$DTBO_SIZE" "$DTBO_SHA256"
 
@@ -233,10 +209,6 @@ MESSAGE_TEXT=$(cat <<EOF
 ✅ Build Completed for ${BUILD_ROM_NAME} on ${DEVICE}
 User: ${USER_NAME}
 Duration: ${FINAL_DURATION}
-⚙️ Configuration:
-• Variant: ${VARIANT}
-• Type: ${BTYPE}
-• Release: ${RELEASE}
 
 🎉 Build Artifact(s) Uploaded:
 <blockquote><code>${ARTIFACTS_TEXT}</code></blockquote>
