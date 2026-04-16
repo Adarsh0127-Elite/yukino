@@ -4,13 +4,13 @@
 
 - To make the script globally available, run the following commands in your terminal:
 ```bash
-   sudo wget https://raw.githubusercontent.com/Adarsh0127-Elite/yukino/main/upload -O "/usr/local/bin/upload"
-   sudo chmod +x /usr/local/bin/upload
+   sudo wget https://raw.githubusercontent.com/Adarsh0127-Elite/yukino/main/upload.sh -O "/usr/local/bin/upload.sh"
+   sudo chmod +x /usr/local/bin/upload.sh
 ```
 
 - To uninstall gofile, you can run:
 ```bash
-   sudo rm "/usr/local/bin/upload"
+   sudo rm "/usr/local/bin/upload.sh"
 ```
 
 #### How to Upload Files:
@@ -22,7 +22,7 @@
 
 ## Non-Root installation (bash)
 ```bash
-wget -q https://raw.githubusercontent.com/Adarsh0127-Elite/yukino/main/upload -O ~/upload && chmod +x ~/upload
+wget -q https://raw.githubusercontent.com/Adarsh0127-Elite/yukino/main/upload.sh -O ~/upload && chmod +x ~/upload.sh
 echo 'alias upload="~/upload"' >> ~/.bashrc && source ~/.bashrc
 ```
 Then run this in the home directory of the rom:
