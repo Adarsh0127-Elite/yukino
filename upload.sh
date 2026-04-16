@@ -5,8 +5,8 @@
 BOT_TOKEN="8786141502:AAE_Zpl9G_V2bMC7wXhhwfGFcAW0nM4mVRM"
 CHAT_ID="6155015997"
 
-# Build Details (Set these dynamically in your CI pipeline)
-USER_NAME="Adarsh"
+# Build Details: Imports from server env var or falls back to the system user
+USER_NAME="${BUILD_USER:-$(whoami)}"
 
 # ================= Internal Config =================
 PRODUCT_BASE="out/target/product"
@@ -29,7 +29,7 @@ send_telegram_text() {
         -d parse_mode="HTML" > /dev/null
 }
 
-# Updated to truncate the ROM name and prevent button stretching
+# Generates vertical buttons with Link Emoji and truncates long ROM names
 generate_buttons() {
     local buttons=""
     
