@@ -14,6 +14,7 @@ STATS="${BUILD_STATS:-Unknown}"
 VARIANT="${BUILD_VARIANT:-Unknown}"
 BTYPE="${BUILD_TYPE:-Unknown}"
 RELEASE="${BUILD_RELEASE:-Unknown}"
+BUILD_DEVICE="${BUILD_DEVICE:-}" # <--- New variable for device codename
 
 # ================= Internal Config =================
 PRODUCT_BASE="out/target/product"
@@ -75,11 +76,16 @@ log() {
 
 # ================= Device Detection =================
 log "--------------------------------------------------"
-log "Detecting device and files..."
 
-DEVICE=$(find "$PRODUCT_BASE" -mindepth 1 -maxdepth 1 -type d \
-    ! -name generic ! -name obj ! -name symbols \
-    -printf "%f\n" | head -n 1)
+if [[ -n "$BUILD_DEVICE" ]]; then
+    DEVICE="$BUILD_DEVICE"
+    log "Device codename imported from server config: $DEVICE"
+else
+    log "Device config missing. Attempting auto-detection..."
+    DEVICE=$(find "$PRODUCT_BASE" -mindepth 1 -maxdepth 1 -type d \
+        ! -name generic ! -name obj ! -name symbols \
+        -printf "%f\n" | head -n 1)
+fi
 
 PRODUCT_DIR="$PRODUCT_BASE/$DEVICE"
 
@@ -88,7 +94,7 @@ if [[ -z "$DEVICE" || ! -d "$PRODUCT_DIR" ]]; then
     exit 1
 fi
 
-log "Device: $DEVICE"
+log "Targeting Device: $DEVICE"
 
 ROM_ZIP=$(find "$PRODUCT_DIR" -type f -name "*${DEVICE}*.zip" \
     | grep -Ev "ota|symbol|target_files" \
