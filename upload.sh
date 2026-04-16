@@ -29,9 +29,15 @@ send_telegram_text() {
         -d parse_mode="HTML" > /dev/null
 }
 
-# Updated to put each button in its own row (Vertical layout) with Link Emoji
+# Updated to truncate the ROM name and prevent button stretching
 generate_buttons() {
     local buttons=""
+    
+    # Truncate the zip name to 18 characters so it doesn't stretch the buttons
+    local short_zip="${ZIP_NAME}"
+    if [[ ${#short_zip} -gt 18 ]]; then
+        short_zip="${short_zip:0:18}..."
+    fi
     
     if [[ "$BOOT_LINK" != "N/A" ]]; then
         buttons+="[{\"text\": \"🔗 $(escape_html "boot.img ($BOOT_SIZE)")\", \"url\": \"$BOOT_LINK\"}],"
@@ -46,7 +52,7 @@ generate_buttons() {
     fi
     
     if [[ "$ROM_LINK" != "N/A" ]]; then
-        buttons+="[{\"text\": \"🔗 $(escape_html "${ZIP_NAME} ($ROM_SIZE)")\", \"url\": \"$ROM_LINK\"}],"
+        buttons+="[{\"text\": \"🔗 $(escape_html "${short_zip} ($ROM_SIZE)")\", \"url\": \"$ROM_LINK\"}],"
     fi
     
     # Remove the trailing comma from the end of the string
