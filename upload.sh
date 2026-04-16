@@ -112,7 +112,6 @@ fmt_size() {
         return
     fi
     
-    # Use stat to get exact bytes, then awk to format as GiB/MiB
     local bytes=$(stat -c%s "$file")
     awk -v b="$bytes" '
     BEGIN {
@@ -176,10 +175,10 @@ rm -rf "$TMP_DIR"
 log "--------------------------------------------------"
 log "Sending UI notification..."
 
-FINAL_START_TIME="${START_TIME_STR:-"Unknown"}"
-FINAL_DURATION="${DURATION_STR:-"Unknown"}"
+# Import duration from the parent CI script. Falls back to "Unknown" if not exported.
+FINAL_DURATION="${BUILD_DURATION:-"Unknown"}"
 
-# Dynamically construct the artifact list text so numbering stays sequential
+# Dynamically construct the artifact list text
 ARTIFACTS_TEXT=""
 COUNTER=1
 
@@ -207,7 +206,6 @@ MESSAGE_TEXT=$(cat <<EOF
 ✅ <b>Build Completed on ${DEVICE}</b>
 
 <b>User:</b> ${USER_NAME}
-<b>Started:</b> ${FINAL_START_TIME}
 <b>Duration:</b> ${FINAL_DURATION}
 
 🎉 <b>Build Artifact(s) Uploaded:</b>
