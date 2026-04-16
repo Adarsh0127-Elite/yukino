@@ -8,13 +8,11 @@ CHAT_ID="6155015997"
 # Build Details: Pulls from env vars exported by your main CI script
 BUILD_ROM_NAME="${BUILD_ROM:-ROM}"
 USER_NAME="${BUILD_USER:-$(whoami)}"
-START_TIME="${BUILD_START_TIME:-Unknown}"
 FINAL_DURATION="${BUILD_DURATION:-Unknown}"
-STATS="${BUILD_STATS:-Unknown}"
 VARIANT="${BUILD_VARIANT:-Unknown}"
 BTYPE="${BUILD_TYPE:-Unknown}"
 RELEASE="${BUILD_RELEASE:-Unknown}"
-BUILD_DEVICE="${BUILD_DEVICE:-}" # <--- New variable for device codename
+BUILD_DEVICE="${BUILD_DEVICE:-}" 
 
 # ================= Internal Config =================
 PRODUCT_BASE="out/target/product"
@@ -234,9 +232,7 @@ ARTIFACTS_TEXT=$(echo -n "$ARTIFACTS_TEXT" | sed '$d')
 MESSAGE_TEXT=$(cat <<EOF
 ✅ Build Completed for ${BUILD_ROM_NAME} on ${DEVICE}
 User: ${USER_NAME}
-Started: ${START_TIME}
 Duration: ${FINAL_DURATION}
-📊 Build Stats: ${STATS} actions
 ⚙️ Configuration:
 • Variant: ${VARIANT}
 • Type: ${BTYPE}
