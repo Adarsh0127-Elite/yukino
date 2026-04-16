@@ -17,7 +17,7 @@
 
 1. Run the script inside the home directory of your rom and the script will automatically choose the devicecode name along with the build and all:
 ```bash
-   upload
+   upload.sh
 ```
 
 ## Non-Root installation (bash)
@@ -27,7 +27,7 @@ echo 'alias upload="~/upload"' >> ~/.bashrc && source ~/.bashrc
 ```
 Then run this in the home directory of the rom:
 ```bash
-upload
+upload.sh
 ```
 
 ## Based on
